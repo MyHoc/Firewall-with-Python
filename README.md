@@ -35,7 +35,8 @@ Once an IP address exceeds the threshold of 40 packets per second or is flagged 
 
 
 Email Notifications:
-To ensure prompt action and awareness, the system sends email notifications to the administrator whenever an IP address is blocked. The notification includes details about the blocked IP, the reason for blocking (excessive packet rate or worm signature detection), and relevant timestamp information.
+To ensure prompt action and awareness, the system sends email notifications to the administrator whenever an IP address is blocked. The notification includes details about the blocked IP, the reason for blocking (excessive packet rate or worm signature detection), and relevant timestamp information. However, since I do not have an API key, this remais a proof-of-concept. In a real world setting and not a home lab, this feature can be enabled pretty easily.
+
 Data Visualization Dashboard:
 A dashboard provides real-time visualization of network traffic data. It shows key metrics such as the number of packets sent per second, IP addresses that have been blocked, and detected worm signatures. The dashboard offers an easy-to-read interface for administrators to monitor network activity and take necessary actions.
 Ongoing Development
