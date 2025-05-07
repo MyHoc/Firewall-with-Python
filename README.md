@@ -28,10 +28,10 @@ The system also analyzes packet content to detect signatures associated with the
 IP Blocking:
 Once an IP address exceeds the threshold of 40 packets per second or is flagged for containing the Nimda worm signature, the system automatically blocks that IP address. This is done through firewall rule modifications, effectively preventing any further malicious activity from the identified IP.
 
-![The IP adresses are blocked if they exceed the number of pakcets sent per second authorised in the firewall rules](screenshot4.png)
+![Screenshot of the Blocked IP adresses section of the dashboard](screenshot4.png)
 
 
-*This is a screenshot of what the firewall log file looks like and what information it saved into these files.* 
+*The IP adresses are blocked if they exceed the number of pakcets sent per second authorised in the firewall rules.* 
 
 
 Email Notifications:
