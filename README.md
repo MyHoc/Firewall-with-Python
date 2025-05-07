@@ -2,7 +2,7 @@ Network Firewall using Python
 
 Overview
 
-This project focuses on monitoring network traffic, detecting and blocking IP addresses that exceed a defined packet rate, and identifying the presence of the Nimda worm signature in network traffic. It includes real-time packet rate analysis, automatic IP blocking, and a dashboard for visualizing traffic patterns and blocked addresses. The system is also designed to send email notifications to the administrator when an action, such as blocking an IP address, is taken. This tool is continually being improved, I will add new features and enhancements regularly. This is momentaraly a proof-of-concept.
+This project focuses on monitoring network traffic, detecting and blocking IP addresses that exceed a defined packet rate, and identifying the presence of the Nimda worm signature in network traffic. It includes real-time packet rate analysis, automatic IP blocking, and a dashboard for visualizing traffic patterns and blocked addresses. The system is also designed to send email notifications to the administrator when an action, such as blocking an IP address, is taken. This tool is continually being improved, I will add new features and enhancements regularly. This is, for the time being, a proof-of-concept.
 
 Key Features
 
