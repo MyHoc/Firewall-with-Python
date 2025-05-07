@@ -1,7 +1,7 @@
 Network Firewall using Python
 
 ![Firewall Dashboard](screenshot2.png)  
-*This is a screenshot of what the firewall dashboard looks like, it shows, in real time, the number of total packets sent, the blocked ip adresses, any malware detected and the uptime.* 
+*This is a screenshot of what the firewall dashboard looks like, it shows, in real time, the number of total packets sent, the blocked ip adresses, any malware detected and the uptime. Now in a real life scenario in a company, it would send alerts to the email of the admin when action was taken, but i have not configured that as i do not have an email api key.* 
 
 Overview
 
@@ -13,6 +13,9 @@ Network Traffic Monitoring:
 The system monitors incoming and outgoing network packets in real-time, using packet capture libraries or raw socket interfaces. It continuously tracks the number of packets sent by each IP address within a second, ensuring efficient analysis of network behavior.
 Packet Rate Analysis:
 The core functionality of the project is to analyze the packet rate per IP address. If an IP address exceeds a threshold of 40 packets per second, it is flagged for further action. This helps to identify potential network abuse or DoS (Denial of Service) attempts based on packet flooding.
+![It logs all of the actions taken into a text file ](screenshot.png) 
+![The file is automatically populated when the firewall script is executed ](screenshot.png)
+*This is a screenshot of what the firewall log file looks like and what information it saved into these files.* 
 Nimda Worm Detection:
 The system also analyzes packet content to detect signatures associated with the Nimda worm. If a packet matches a known Nimda worm signature, it is flagged as malicious, indicating a potential security threat.
 IP Blocking:
