@@ -17,6 +17,8 @@ Packet Rate Analysis:
 The core functionality of the project is to analyze the packet rate per IP address. If an IP address exceeds a threshold of 40 packets per second, it is flagged for further action. This helps to identify potential network abuse or DoS (Denial of Service) attempts based on packet flooding.
 ![It logs all of the actions taken into a text file ](screenshot.png) 
 ![The file is automatically populated when the firewall script is executed ](screenshot3.png)
+
+
 *This is a screenshot of what the firewall log file looks like and what information it saved into these files.* 
 Nimda Worm Detection:
 The system also analyzes packet content to detect signatures associated with the Nimda worm. If a packet matches a known Nimda worm signature, it is flagged as malicious, indicating a potential security threat.
