@@ -2,7 +2,7 @@ Network Firewall using Python
 
 Overview
 
-This project focuses on monitoring network traffic, detecting and blocking IP addresses that exceed a defined packet rate, and identifying the presence of the Nimda worm signature in network traffic. It includes real-time packet rate analysis, automatic IP blocking, and a dashboard for visualizing traffic patterns and blocked addresses. The system is also designed to send email notifications to the administrator when an action, such as blocking an IP address, is taken. This tool is continually being improved, with new features and enhancements being added regularly.
+This project focuses on monitoring network traffic, detecting and blocking IP addresses that exceed a defined packet rate, and identifying the presence of the Nimda worm signature in network traffic. It includes real-time packet rate analysis, automatic IP blocking, and a dashboard for visualizing traffic patterns and blocked addresses. The system is also designed to send email notifications to the administrator when an action, such as blocking an IP address, is taken. This tool is continually being improved, I will add new features and enhancements regularly. This is momentaraly a proof-of-concept.
 
 Key Features
 
@@ -20,7 +20,7 @@ Data Visualization Dashboard:
 A dashboard provides real-time visualization of network traffic data. It shows key metrics such as the number of packets sent per second, IP addresses that have been blocked, and detected worm signatures. The dashboard offers an easy-to-read interface for administrators to monitor network activity and take necessary actions.
 Ongoing Development
 
-This project is actively being developed, with plans for future improvements. Upcoming features include more advanced worm signature detection, optimizations to handle larger traffic volumes, and enhanced reporting capabilities. The goal is to create a comprehensive traffic monitoring and security tool that can help prevent network-based attacks and ensure smooth network operation.
+This project is actively being developed, with plans for future improvements. Upcoming features include more advanced malware signature detection, optimizations to handle larger traffic volumes, and enhanced reporting capabilities. The goal is to create a comprehensive traffic monitoring and security tool that can help prevent network-based attacks and ensure smooth network operation.
 
 Conclusion
 
