@@ -12,7 +12,7 @@ from flask import Flask, render_template, jsonify
 # Constants
 THRESHOLD = 100
 MAX_HISTORY_SIZE = 1000  # Max events to store in memory
-EMAIL_API_KEY = "YOUR_EMAIL_API_KEY"  # Replace with your email API key
+EMAIL_API_KEY = "EMAIL_API_KEY"  # I don have an email api key, replace with actual one
 EMAIL_API_URL = "https://api.emailprovider.com/v1/send"  # Replace with actual email API endpoint
 EMAIL_FROM = "firewall@yourdomain.com"
 EMAIL_TO = "admin@yourdomain.com"
