@@ -20,10 +20,20 @@ The core functionality of the project is to analyze the packet rate per IP addre
 
 
 *This is a screenshot of what the firewall log file looks like and what information it saved into these files.* 
+
+
 Nimda Worm Detection:
 The system also analyzes packet content to detect signatures associated with the Nimda worm. If a packet matches a known Nimda worm signature, it is flagged as malicious, indicating a potential security threat.
+
 IP Blocking:
 Once an IP address exceeds the threshold of 40 packets per second or is flagged for containing the Nimda worm signature, the system automatically blocks that IP address. This is done through firewall rule modifications, effectively preventing any further malicious activity from the identified IP.
+
+![The IP adresses are blocked if they exceed the number of pakcets sent per second authorised in the firewall rules](screenshot4.png)
+
+
+*This is a screenshot of what the firewall log file looks like and what information it saved into these files.* 
+
+
 Email Notifications:
 To ensure prompt action and awareness, the system sends email notifications to the administrator whenever an IP address is blocked. The notification includes details about the blocked IP, the reason for blocking (excessive packet rate or worm signature detection), and relevant timestamp information.
 Data Visualization Dashboard:
