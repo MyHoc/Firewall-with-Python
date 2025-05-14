@@ -713,3 +713,475 @@ def run_dashboard():
                         title: {
                             display: true,
                             text: 'Time (seconds ago)'
+                        }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        position: 'top',
+                    }
+                },
+                animation: {
+                    duration: 0
+                }
+            }
+        });
+        
+        // Initialize attack distribution chart
+        const attackCtx = document.getElementById('attackChart').getContext('2d');
+        const attackChart = new Chart(attackCtx, {
+            type: 'pie',
+            data: {
+                labels: [],
+                datasets: [{
+                    data: [],
+                    backgroundColor: [
+                        'rgba(255, 99, 132, 0.7)',
+                        'rgba(54, 162, 235, 0.7)',
+                        'rgba(255, 206, 86, 0.7)',
+                        'rgba(75, 192, 192, 0.7)',
+                        'rgba(153, 102, 255, 0.7)',
+                        'rgba(255, 159, 64, 0.7)',
+                        'rgba(199, 199, 199, 0.7)',
+                        'rgba(83, 102, 255, 0.7)',
+                        'rgba(40, 167, 69, 0.7)',
+                        'rgba(220, 53, 69, 0.7)'
+                    ],
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'right',
+                        labels: {
+                            boxWidth: 12
+                        }
+                    }
+                }
+            }
+        });
+        
+        // Format time duration
+        function formatDuration(seconds) {
+            const hrs = Math.floor(seconds / 3600);
+            const mins = Math.floor((seconds % 3600) / 60);
+            const secs = Math.floor(seconds % 60);
+            
+            let result = '';
+            if (hrs > 0) result += `${hrs}h `;
+            if (mins > 0) result += `${mins}m `;
+            result += `${secs}s`;
+            
+            return result;
+        }
+        
+        // Update dashboard with latest data
+        function updateDashboard() {
+            // Update statistics
+            fetch('/api/stats')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('totalPackets').textContent = data.total_packets.toLocaleString();
+                    document.getElementById('blockedIPs').textContent = data.blocked_ips;
+                    
+                    // Calculate total attack detections
+                    const totalAttacks = Object.values(data.detected_attacks).reduce((sum, count) => sum + count, 0);
+                    document.getElementById('attackDetections').textContent = totalAttacks;
+                    
+                    document.getElementById('uptime').textContent = formatDuration(data.uptime);
+                });
+            
+            // Update events
+            fetch('/api/events')
+                .then(response => response.json())
+                .then(events => {
+                    const eventList = document.getElementById('eventList');
+                    eventList.innerHTML = '';
+                    
+                    // Display most recent events first
+                    events.reverse().forEach(event => {
+                        const eventDiv = document.createElement('div');
+                        eventDiv.className = `event-item ${event.type}`;
+                        eventDiv.innerHTML = `
+                            <strong>${event.timestamp}</strong>: ${event.message}
+                        `;
+                        eventList.appendChild(eventDiv);
+                    });
+                });
+            
+            // Update blocked IPs
+            fetch('/api/blocks')
+                .then(response => response.json())
+                .then(blocks => {
+                    const blockedList = document.getElementById('blockedList');
+                    blockedList.innerHTML = '';
+                    
+                    blocks.reverse().forEach(block => {
+                        const row = document.createElement('tr');
+                        row.innerHTML = `
+                            <td>${block.ip}</td>
+                            <td>${block.reason}</td>
+                            <td>${block.timestamp}</td>
+                        `;
+                        blockedList.appendChild(row);
+                    });
+                });
+            
+            // Update traffic chart
+            fetch('/api/traffic')
+                .then(response => response.json())
+                .then(trafficData => {
+                    // Clear previous datasets
+                    trafficChart.data.datasets = [];
+                    
+                    // Add new datasets (limit to top 5 IPs by traffic)
+                    const topIPs = Object.keys(trafficData)
+                        .map(ip => ({
+                            ip,
+                            total: trafficData[ip].reduce((sum, count) => sum + count, 0)
+                        }))
+                        .sort((a, b) => b.total - a.total)
+                        .slice(0, 5)
+                        .map(item => item.ip);
+                    
+                    // Generate colors for IPs
+                    const getColor = (index) => {
+                        const colors = [
+                            'rgba(255, 99, 132, 0.7)',
+                            'rgba(54, 162, 235, 0.7)',
+                            'rgba(255, 206, 86, 0.7)',
+                            'rgba(75, 192, 192, 0.7)',
+                            'rgba(153, 102, 255, 0.7)'
+                        ];
+                        return colors[index % colors.length];
+                    };
+                    
+                    topIPs.forEach((ip, index) => {
+                        trafficChart.data.datasets.push({
+                            label: ip,
+                            data: trafficData[ip],
+                            backgroundColor: getColor(index),
+                            borderColor: getColor(index),
+                            borderWidth: 2,
+                            tension: 0.4
+                        });
+                    });
+                    
+                    trafficChart.update();
+                });
+                
+            // Update attack chart
+            fetch('/api/attack-stats')
+                .then(response => response.json())
+                .then(attackData => {
+                    // Limit to top 10 attack types
+                    const topAttacks = attackData.slice(0, 10);
+                    
+                    attackChart.data.labels = topAttacks.map(item => item.name);
+                    attackChart.data.datasets[0].data = topAttacks.map(item => item.count);
+                    
+                    attackChart.update();
+                    
+                    // Update the attack list table
+                    const attackList = document.getElementById('attackList');
+                    attackList.innerHTML = '';
+                    
+                    attackData.forEach(attack => {
+                        const row = document.createElement('tr');
+                        row.innerHTML = `
+                            <td>${attack.name}</td>
+                            <td>${attack.count}</td>
+                        `;
+                        attackList.appendChild(row);
+                    });
+                });
+        }
+        
+        // Update dashboard every 2 seconds
+        setInterval(updateDashboard, 2000);
+        updateDashboard();
+    </script>
+</body>
+</html>""")
+
+    # Create whitelist.html file
+    with open("templates/whitelist.html", "w") as f:
+        f.write("""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Whitelist Management | Enhanced Firewall</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { padding: 20px; background-color: #f8f9fa; }
+        .card { margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .navbar { margin-bottom: 20px; }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="/">Enhanced Network Firewall</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav">
+                    <li class="nav-item">
+                        <a class="nav-link" href="/">Dashboard</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link active" href="/whitelist">Whitelist</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/blacklist">Blacklist</a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container-fluid">
+        <div class="row">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Whitelist Management</h5>
+                    </div>
+                    <div class="card-body">
+                        <p>Whitelisted IPs are allowed through the firewall without inspection.</p>
+                        
+                        <form method="post" class="mb-4">
+                            <div class="input-group">
+                                <input type="text" name="ip" class="form-control" placeholder="IP Address" required>
+                                <input type="hidden" name="action" value="add">
+                                <button type="submit" class="btn btn-success">Add to Whitelist</button>
+                            </div>
+                        </form>
+                        
+                        <div class="table-responsive">
+                            <table class="table table-striped">
+                                <thead>
+                                    <tr>
+                                        <th>IP Address</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for ip in ips %}
+                                    <tr>
+                                        <td>{{ ip }}</td>
+                                        <td>
+                                            <form method="post" style="display: inline;">
+                                                <input type="hidden" name="ip" value="{{ ip }}">
+                                                <input type="hidden" name="action" value="remove">
+                                                <button type="submit" class="btn btn-danger btn-sm">Remove</button>
+                                            </form>
+                                        </td>
+                                    </tr>
+                                    {% else %}
+                                    <tr>
+                                        <td colspan="2">No whitelist entries found.</td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Whitelist Information</h5>
+                    </div>
+                    <div class="card-body">
+                        <h6>About the Whitelist</h6>
+                        <p>The whitelist contains IP addresses that are trusted and will be allowed through the firewall without any filtering or rate limiting.</p>
+                        
+                        <h6>When to use the Whitelist</h6>
+                        <ul>
+                            <li>For trusted internal network addresses</li>
+                            <li>For critical infrastructure servers</li>
+                            <li>For administrative access points</li>
+                        </ul>
+                        
+                        <h6>Best Practices</h6>
+                        <ul>
+                            <li>Keep your whitelist as small as possible</li>
+                            <li>Regularly review whitelist entries</li>
+                            <li>Consider using specific IP addresses rather than network ranges</li>
+                            <li>Document why each IP is whitelisted</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>""")
+
+    # Create blacklist.html file
+    with open("templates/blacklist.html", "w") as f:
+        f.write("""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blacklist Management | Enhanced Firewall</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { padding: 20px; background-color: #f8f9fa; }
+        .card { margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .navbar { margin-bottom: 20px; }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="/">Enhanced Network Firewall</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav">
+                    <li class="nav-item">
+                        <a class="nav-link" href="/">Dashboard</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/whitelist">Whitelist</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link active" href="/blacklist">Blacklist</a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container-fluid">
+        <div class="row">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Blacklist Management</h5>
+                    </div>
+                    <div class="card-body">
+                        <p>Blacklisted IPs are automatically blocked by the firewall.</p>
+                        
+                        <form method="post" class="mb-4">
+                            <div class="input-group">
+                                <input type="text" name="ip" class="form-control" placeholder="IP Address" required>
+                                <input type="hidden" name="action" value="add">
+                                <button type="submit" class="btn btn-danger">Add to Blacklist</button>
+                            </div>
+                        </form>
+                        
+                        <div class="table-responsive">
+                            <table class="table table-striped">
+                                <thead>
+                                    <tr>
+                                        <th>IP Address</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for ip in ips %}
+                                    <tr>
+                                        <td>{{ ip }}</td>
+                                        <td>
+                                            <form method="post" style="display: inline;">
+                                                <input type="hidden" name="ip" value="{{ ip }}">
+                                                <input type="hidden" name="action" value="remove">
+                                                <button type="submit" class="btn btn-secondary btn-sm">Remove</button>
+                                            </form>
+                                        </td>
+                                    </tr>
+                                    {% else %}
+                                    <tr>
+                                        <td colspan="2">No blacklist entries found.</td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Blacklist Information</h5>
+                    </div>
+                    <div class="card-body">
+                        <h6>About the Blacklist</h6>
+                        <p>The blacklist contains IP addresses that are automatically blocked by the firewall without further inspection.</p>
+                        
+                        <h6>When to use the Blacklist</h6>
+                        <ul>
+                            <li>For known malicious IP addresses</li>
+                            <li>For persistent attackers</li>
+                            <li>For IPs from high-risk geographic regions</li>
+                            <li>For IPs that have triggered multiple security events</li>
+                        </ul>
+                        
+                        <h6>Best Practices</h6>
+                        <ul>
+                            <li>Regularly update your blacklist with known threat intelligence</li>
+                            <li>Periodically review blocked IPs to avoid false positives</li>
+                            <li>Consider implementing time-based expiration for blacklist entries</li>
+                            <li>Document why each IP is blacklisted</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>""")
+    
+    # Start Flask app
+    app.run(host=DASHBOARD_HOST, port=DASHBOARD_PORT, debug=False)
+
+if __name__ == "__main__":
+    # Check for root privileges
+    if os.geteuid() != 0:
+        print("This script requires root privileges to manage firewall rules.")
+        print("Please run with sudo: sudo python3 enhanced_firewall.py")
+        sys.exit(1)
+    
+    # Import whitelist and blacklist IPs
+    whitelist_ips = read_ip_file("whitelist.txt")
+    blacklist_ips = read_ip_file("blacklist.txt")
+    
+    # Initialize variables
+    packet_count = defaultdict(int)
+    last_check = [int(time.time())]
+    
+    # Start dashboard in a separate thread
+    print(f"Starting dashboard on http://{DASHBOARD_HOST}:{DASHBOARD_PORT}")
+    dashboard_thread = threading.Thread(target=run_dashboard)
+    dashboard_thread.daemon = True
+    dashboard_thread.start()
+    
+    # Start packet sniffing
+    log_event("Enhanced Firewall started. Monitoring network traffic...")
+    print(f"Rate limit THRESHOLD: {THRESHOLD} packets/second")
+    print("Monitoring for OWASP Top 10 and common attack signatures...")
+    
+    try:
+        # Start packet sniffing
+        sniff(filter="ip", prn=packet_callback, store=0)
+    except KeyboardInterrupt:
+        log_event("Firewall stopped by user.", "info")
+        print("\nFirewall stopped. Goodbye!")
