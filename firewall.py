@@ -4,26 +4,31 @@ import time
 import json
 import threading
 import requests
+import re
+import base64
+import ipaddress
+import urllib.parse
 from datetime import datetime
 from collections import defaultdict, deque
-from scapy.all import sniff, IP, TCP
-from flask import Flask, render_template, jsonify
+from scapy.all import sniff, IP, TCP, UDP, Raw
+from flask import Flask, render_template, jsonify, request
 
 # Constants
-THRESHOLD = 100
+THRESHOLD = 100  # Max packets per second before rate limiting
 MAX_HISTORY_SIZE = 1000  # Max events to store in memory
-EMAIL_API_KEY = "EMAIL_API_KEY"  # I don have an email api key, replace with actual one
+EMAIL_API_KEY = "EMAIL_API_KEY"  # Replace with actual one
 EMAIL_API_URL = "https://api.emailprovider.com/v1/send"  # Replace with actual email API endpoint
 EMAIL_FROM = "firewall@yourdomain.com"
 EMAIL_TO = "admin@yourdomain.com"
 DASHBOARD_HOST = "0.0.0.0"  # Listen on all interfaces
 DASHBOARD_PORT = 8080
+ALERT_COOLDOWN = 300  # Seconds between alerts for the same IP (5 minutes)
 
 # Global statistics
 stats = {
     "total_packets": 0,
     "blocked_ips": set(),
-    "nimda_detections": 0,
+    "detected_attacks": defaultdict(int),  # Count by attack type
     "rate_limit_blocks": 0,
     "blacklist_blocks": 0,
     "start_time": time.time()
@@ -33,6 +38,111 @@ stats = {
 events_history = deque(maxlen=MAX_HISTORY_SIZE)
 packet_history = defaultdict(lambda: deque(maxlen=60))  # Store 60 seconds of packet counts
 block_history = []  # Store blocked IP data
+last_alert_time = defaultdict(float)  # Track when alerts were last sent for an IP
+
+# OWASP Top 10 and common attack pattern definitions
+ATTACK_SIGNATURES = {
+    # SQL Injection patterns
+    "sql_injection": [
+        r"(?i)(\b(select|update|delete|insert|drop|alter|create|union)\b.+\b(from|into|table|database|values)\b)",
+        r"(?i)((\%27)|('))((\%6F)|o|(\%4F))((\%72)|r|(\%52))",
+        r"(?i)(\b(or|and)\b\s+\d+\s*[=<>])",
+        r"(?i)((\%27)|(')|(\-\-)|(\%23)|(#))",
+        r"(?i)((\%3D)|(=))[^\n]*((\%27)|(')|((\-\-)|(\%3B)|(;)))",
+        r"(?i)exec(\s|\+)+(s|x)p\w+",
+        r"(?i)SLEEP\(\d+\)"
+    ],
+    
+    # Cross-Site Scripting (XSS) patterns
+    "xss": [
+        r"(?i)<[^\w<>]*(?:[^<>\"'\s]*:)?[^\w<>]*(?:\W*s\W*c\W*r\W*i\W*p\W*t|\W*f\W*o\W*r\W*m|\W*s\W*t\W*y\W*l\W*e|\W*b\W*a\W*s\W*e|\W*i\W*m\W*g)",
+        r"(?i)(<script[^>]*>[\s\S]*?<\/script>|<[^>]+on\w+\s*=|javascript:)",
+        r"(?i)(\b)(on\S+)(\s*=\s*[\"']?[^\"'>\s]*)",
+        r"(?i)((\%3C)|<)((\%2F)|\/)*[a-z0-9\%]+((\%3E)|>)",
+        r"(?i)((\%3C)|<)[^\n]+((\%3E)|>)"
+    ],
+    
+    # Path Traversal patterns
+    "path_traversal": [
+        r"(?i)(\.\./|\.\.\%2f|\.\%2e/|\.\%2e\%2f|\%2e\%2e\%2f|\%2e\%2e/)",
+        r"(?i)(/etc/passwd|/etc/shadow|/etc/hosts|c:\\windows\\win.ini|boot\.ini|/proc/self/environ)",
+        r"(?i)(%00|\\0|\.\.%c0%af|%c1%9c)"
+    ],
+    
+    # Command Injection patterns
+    "command_injection": [
+        r"(?i)(\||;|`|\$\(|\$\{|\&\&|\|\|)",
+        r"(?i)(system\(|exec\(|shell_exec\(|passthru\(|eval\(|popen\()",
+        r"(?i)(/bin/sh|/bin/bash|cmd\.exe|powershell\.exe)"
+    ],
+    
+    # Server-Side Request Forgery (SSRF) patterns
+    "ssrf": [
+        r"(?i)(127\.0\.0\.1|localhost|0\.0\.0\.0|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+|192\.168\.\d+\.\d+)",
+        r"(?i)(file://|dict://|gopher://|ldap://)"
+    ],
+    
+    # XML-related attacks (XXE, XPath Injection)
+    "xml_attack": [
+        r"(?i)(\<!DOCTYPE|\<\!ENTITY|\<\!ELEMENT)",
+        r"(?i)(\%PDF|\%JVBERY|\%TVqQAA)"
+    ],
+    
+    # Local/Remote File Inclusion
+    "file_inclusion": [
+        r"(?i)((https?|ftp|php|data|file)(:\/\/|%3a%2f%2f))",
+        r"(?i)((\=|%3D)https?:\/\/)"
+    ],
+    
+    # Cross-Site Request Forgery (CSRF) patterns
+    "csrf": [
+        r"(?i)(authenticity_token|csrf_token|anticsrf)",
+        r"(?i)(verify=|confirm=|token=)"
+    ],
+    
+    # Web Shell detection
+    "webshell": [
+        r"(?i)(c99shell|r57shell|wso\.php|shell\.php|filesman\.php)",
+        r"(?i)(passthru|shell_exec|system|phpinfo|base64_decode|edoced_46esab|chmod|mkdir|fopen|fclose|readfile)"
+    ],
+    
+    # Common malware/bot user-agents
+    "malicious_useragent": [
+        r"(?i)(zgrab|dirbuster|nikto|nessus|sqlmap|python-requests\/|wget\/|curl\/|scanner|nmap)",
+        r"(?i)(metasploit|burpsuite|zap\/|dafanbuddy|wprecon|acunetix|appscan)",
+        r"(?i)(python|perl|go\-http\-client|winhttp|libwww)"
+    ],
+    
+    # Denial of Service attack patterns
+    "dos_attack": [
+        r"(slowloris|torshammer|hping)",
+        r"(\.(\.)+)"
+    ],
+    
+    # Log4j/Log4Shell vulnerability exploitation
+    "log4j": [
+        r"(?i)(\$\{jndi:(ldap|rmi|dns|corba|iiop)://)",
+        r"(?i)(\$\{(ctx|lower|upper))"
+    ],
+    
+    # Apache Struts vulnerability exploitation
+    "struts": [
+        r"(?i)(%\{(\#|%23)_memberAccess)",
+        r"(?i)((#|%23)_memberAccess\[)"
+    ],
+    
+    # Ransomware/Cryptominers
+    "ransomware": [
+        r"(?i)(wannacry|petya|ryuk|locky|cryptolocker)",
+        r"(?i)(monero|coinhive\.min\.js)"
+    ]
+}
+
+# Suspicious file extensions to monitor
+SUSPICIOUS_EXTENSIONS = [
+    ".php", ".asp", ".aspx", ".jsp", ".exe", ".bat", ".sh", ".ps1", ".py", ".pl",
+    ".cgi", ".dll", ".config", ".bak", ".old", ".sql", ".log"
+]
 
 # Read IPs from a file
 def read_ip_file(filename):
@@ -46,12 +156,106 @@ def read_ip_file(filename):
             pass
         return set()
 
-# Check for Nimda worm signature
-def is_nimda_worm(packet):
-    if packet.haslayer(TCP) and packet[TCP].dport == 80:
-        payload = bytes(packet[TCP].payload)
-        return b"GET /scripts/root.exe" in payload
-    return False
+# Decode URL-encoded or base64-encoded payloads
+def decode_payload(payload):
+    decoded_payloads = [payload]
+    
+    # Try URL decoding (multiple times for nested encoding)
+    try:
+        url_decoded = urllib.parse.unquote(payload)
+        if url_decoded != payload:
+            decoded_payloads.append(url_decoded)
+            # Try second level decoding
+            url_decoded2 = urllib.parse.unquote(url_decoded)
+            if url_decoded2 != url_decoded:
+                decoded_payloads.append(url_decoded2)
+    except:
+        pass
+    
+    # Try base64 decoding
+    try:
+        # Try to find base64 patterns
+        base64_pattern = re.compile(r'[A-Za-z0-9+/]{30,}={0,2}')
+        matches = base64_pattern.findall(payload)
+        for match in matches:
+            try:
+                decoded = base64.b64decode(match).decode('utf-8', errors='ignore')
+                if decoded and len(decoded) > 5:  # Avoid false positives on short strings
+                    decoded_payloads.append(decoded)
+            except:
+                pass
+    except:
+        pass
+    
+    return decoded_payloads
+
+# Check for known attack signatures
+def detect_attack_signatures(data):
+    detections = []
+    
+    # Process potential encodings
+    payload_variations = decode_payload(data)
+    
+    # Check each attack type
+    for attack_type, patterns in ATTACK_SIGNATURES.items():
+        for pattern in patterns:
+            for payload in payload_variations:
+                if re.search(pattern, payload):
+                    detections.append(attack_type)
+                    stats["detected_attacks"][attack_type] += 1
+                    break
+            if attack_type in detections:
+                break
+    
+    return detections
+
+# Check if HTTP request contains suspicious file paths
+def check_suspicious_paths(data):
+    try:
+        # Extract URL from HTTP request
+        match = re.search(r"(GET|POST|PUT|DELETE|HEAD)\s+([^\s]+)", data)
+        if match:
+            path = match.group(2)
+            
+            # Check for suspicious extensions
+            for ext in SUSPICIOUS_EXTENSIONS:
+                if ext in path:
+                    return f"Suspicious extension: {ext}"
+            
+            # Check for admin/sensitive paths
+            sensitive_paths = ["admin", "backup", "wp-admin", "phpmyadmin", "manager", "console"]
+            for sensitive in sensitive_paths:
+                if f"/{sensitive}/" in path or path.endswith(f"/{sensitive}"):
+                    return f"Sensitive path access: {sensitive}"
+    except:
+        pass
+    
+    return None
+
+# Check for Nimda worm signature and other HTTP-based exploits
+def detect_http_attacks(packet):
+    detections = []
+    
+    if packet.haslayer(TCP) and packet.haslayer(Raw):
+        payload = bytes(packet[Raw].load).decode('latin-1', errors='ignore')
+        
+        # Legacy Nimda detection
+        if packet[TCP].dport == 80 and b"GET /scripts/root.exe" in packet[Raw].load:
+            detections.append("nimda_worm")
+        
+        # Detect HTTP-based attacks using signatures
+        if packet[TCP].dport == 80 or packet[TCP].dport == 443:
+            # Check for HTTP request
+            if payload.startswith(("GET ", "POST ", "PUT ", "DELETE ", "HEAD ")):
+                attack_signatures = detect_attack_signatures(payload)
+                detections.extend(attack_signatures)
+                
+                # Check for suspicious paths
+                suspicious_path = check_suspicious_paths(payload)
+                if suspicious_path:
+                    detections.append(f"suspicious_path:{suspicious_path}")
+    
+    return detections
 
 # Log events to a file and memory
 def log_event(message, event_type="info"):
@@ -84,7 +288,13 @@ def log_event(message, event_type="info"):
     print(log_message)
 
 # Send email alert
-def send_email_alert(subject, message):
+def send_email_alert(subject, message, ip=None):
+    # Check cooldown period for this IP
+    current_time = time.time()
+    if ip and (current_time - last_alert_time.get(ip, 0) < ALERT_COOLDOWN):
+        log_event(f"Alert for IP {ip} suppressed (cooldown period)", "info")
+        return
+    
     try:
         payload = {
             "api_key": EMAIL_API_KEY,
@@ -98,16 +308,27 @@ def send_email_alert(subject, message):
         
         if response.status_code == 200:
             log_event(f"Email alert sent: {subject}")
+            if ip:
+                last_alert_time[ip] = current_time
         else:
             log_event(f"Failed to send email alert. Status code: {response.status_code}", "error")
     except Exception as e:
         log_event(f"Error sending email alert: {str(e)}", "error")
 
-# Block an IP using iptables
+# Block an IP using iptables or pfctl
 def block_ip(ip, reason):
     try:
-        # For macOS - use pfctl
-        block_command = f"echo 'block drop from {ip} to any' | sudo pfctl -ef -"
+        # Check if this is a valid IP address (avoid command injection)
+        ipaddress.ip_address(ip)
+        
+        # Use appropriate firewall command based on OS
+        if sys.platform == "darwin":
+            # For macOS - use pfctl
+            block_command = f"echo 'block drop from {ip} to any' | sudo pfctl -ef -"
+        else:
+            # For Linux - use iptables
+            block_command = f"sudo iptables -A INPUT -s {ip} -j DROP"
+            
         os.system(block_command)
         
         stats["blocked_ips"].add(ip)
@@ -122,8 +343,13 @@ def block_ip(ip, reason):
         
         # Send email alert
         subject = f"Firewall Alert: IP {ip} Blocked"
-        message = f"The IP address {ip} has been blocked.\nReason: {reason}\nTime: {block_data['timestamp']}"
-        threading.Thread(target=send_email_alert, args=(subject, message)).start()
+        message = f"""The IP address {ip} has been blocked.
+Reason: {reason}
+Time: {block_data['timestamp']}
+
+This is an automated alert from your enhanced network firewall.
+"""
+        threading.Thread(target=send_email_alert, args=(subject, message, ip)).start()
         
         return True
     except Exception as e:
@@ -151,11 +377,12 @@ def packet_callback(packet):
             stats["blacklist_blocks"] += 1
         return
     
-    # Check for Nimda worm signature
-    if is_nimda_worm(packet):
-        if block_ip(src_ip, "Nimda Worm Detection"):
-            log_event(f"Blocking Nimda source IP: {src_ip}", "malware")
-            stats["nimda_detections"] += 1
+    # Check for attack signatures in HTTP traffic
+    attack_detections = detect_http_attacks(packet)
+    if attack_detections:
+        attack_types = ", ".join(attack_detections)
+        if block_ip(src_ip, f"Attack detected: {attack_types}"):
+            log_event(f"Blocking IP: {src_ip}, detected attack types: {attack_types}", "attack")
         return
     
     # Track packet rate
@@ -197,7 +424,7 @@ def api_stats():
     return jsonify({
         "total_packets": stats["total_packets"],
         "blocked_ips": len(stats["blocked_ips"]),
-        "nimda_detections": stats["nimda_detections"],
+        "detected_attacks": dict(stats["detected_attacks"]),
         "rate_limit_blocks": stats["rate_limit_blocks"],
         "blacklist_blocks": stats["blacklist_blocks"],
         "uptime": int(uptime)
@@ -227,6 +454,69 @@ def api_traffic():
     
     return jsonify(traffic_data)
 
+@app.route('/api/attack-stats')
+def api_attack_stats():
+    # Return attack statistics
+    if not stats["detected_attacks"]:
+        return jsonify([])
+    
+    attack_data = [{"name": attack, "count": count} for attack, count in stats["detected_attacks"].items()]
+    return jsonify(sorted(attack_data, key=lambda x: x["count"], reverse=True))
+
+@app.route('/whitelist', methods=['GET', 'POST'])
+def manage_whitelist():
+    if request.method == 'POST':
+        action = request.form.get('action')
+        ip = request.form.get('ip')
+        
+        try:
+            # Validate IP address
+            ipaddress.ip_address(ip)
+            
+            if action == 'add':
+                whitelist_ips.add(ip)
+                with open("whitelist.txt", "w") as f:
+                    for whitelist_ip in whitelist_ips:
+                        f.write(f"{whitelist_ip}\n")
+                log_event(f"Added {ip} to whitelist", "config")
+            elif action == 'remove':
+                whitelist_ips.discard(ip)
+                with open("whitelist.txt", "w") as f:
+                    for whitelist_ip in whitelist_ips:
+                        f.write(f"{whitelist_ip}\n")
+                log_event(f"Removed {ip} from whitelist", "config")
+        except ValueError:
+            pass
+    
+    return render_template('whitelist.html', ips=sorted(whitelist_ips))
+
+@app.route('/blacklist', methods=['GET', 'POST'])
+def manage_blacklist():
+    if request.method == 'POST':
+        action = request.form.get('action')
+        ip = request.form.get('ip')
+        
+        try:
+            # Validate IP address
+            ipaddress.ip_address(ip)
+            
+            if action == 'add':
+                blacklist_ips.add(ip)
+                with open("blacklist.txt", "w") as f:
+                    for blacklist_ip in blacklist_ips:
+                        f.write(f"{blacklist_ip}\n")
+                log_event(f"Added {ip} to blacklist", "config")
+            elif action == 'remove':
+                blacklist_ips.discard(ip)
+                with open("blacklist.txt", "w") as f:
+                    for blacklist_ip in blacklist_ips:
+                        f.write(f"{blacklist_ip}\n")
+                log_event(f"Removed {ip} from blacklist", "config")
+        except ValueError:
+            pass
+    
+    return render_template('blacklist.html', ips=sorted(blacklist_ips))
+
 # Start dashboard in a separate thread
 def run_dashboard():
     # Create templates directory if it doesn't exist
@@ -239,7 +529,7 @@ def run_dashboard():
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Firewall Dashboard</title>
+    <title>Enhanced Firewall Dashboard</title>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
     <style>
@@ -249,15 +539,38 @@ def run_dashboard():
         .stats-card h3 { font-size: 2rem; margin: 10px 0; }
         .event-item { padding: 8px; border-bottom: 1px solid #eee; }
         .event-item.block { background-color: #ffebee; }
+        .event-item.attack { background-color: #f8bbd0; }
         .event-item.malware { background-color: #ffecb3; }
         .event-item.ratelimit { background-color: #e8f5e9; }
+        .event-item.config { background-color: #e1f5fe; }
         #eventList { max-height: 400px; overflow-y: auto; }
+        .navbar { margin-bottom: 20px; }
     </style>
 </head>
 <body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="/">Enhanced Network Firewall</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav">
+                    <li class="nav-item">
+                        <a class="nav-link active" href="/">Dashboard</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/whitelist">Whitelist</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/blacklist">Blacklist</a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
     <div class="container-fluid">
-        <h1 class="mb-4">Network Firewall Dashboard</h1>
-        
         <div class="row">
             <div class="col-md-3">
                 <div class="card stats-card">
@@ -278,8 +591,8 @@ def run_dashboard():
             <div class="col-md-3">
                 <div class="card stats-card">
                     <div class="card-body">
-                        <h5 class="card-title">Malware Detected</h5>
-                        <h3 id="malwareDetected">0</h3>
+                        <h5 class="card-title">Attack Detections</h5>
+                        <h3 id="attackDetections">0</h3>
                     </div>
                 </div>
             </div>
@@ -295,12 +608,26 @@ def run_dashboard():
         
         <div class="row mt-4">
             <div class="col-md-8">
-                <div class="card">
-                    <div class="card-header">
-                        <h5>Traffic Monitor</h5>
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header">
+                                <h5>Traffic Monitor</h5>
+                            </div>
+                            <div class="card-body">
+                                <canvas id="trafficChart" height="250"></canvas>
+                            </div>
+                        </div>
                     </div>
-                    <div class="card-body">
-                        <canvas id="trafficChart" height="250"></canvas>
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header">
+                                <h5>Attack Distribution</h5>
+                            </div>
+                            <div class="card-body">
+                                <canvas id="attackChart" height="250"></canvas>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 
@@ -309,18 +636,20 @@ def run_dashboard():
                         <h5>Blocked IPs</h5>
                     </div>
                     <div class="card-body">
-                        <table class="table table-striped">
-                            <thead>
-                                <tr>
-                                    <th>IP Address</th>
-                                    <th>Reason</th>
-                                    <th>Time</th>
-                                </tr>
-                            </thead>
-                            <tbody id="blockedList">
-                                <!-- Blocked IPs will be listed here -->
-                            </tbody>
-                        </table>
+                        <div class="table-responsive">
+                            <table class="table table-striped">
+                                <thead>
+                                    <tr>
+                                        <th>IP Address</th>
+                                        <th>Reason</th>
+                                        <th>Time</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="blockedList">
+                                    <!-- Blocked IPs will be listed here -->
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -336,10 +665,30 @@ def run_dashboard():
                         </div>
                     </div>
                 </div>
+                
+                <div class="card mt-4">
+                    <div class="card-header">
+                        <h5>OWASP Top 10 Detections</h5>
+                    </div>
+                    <div class="card-body">
+                        <table class="table table-sm">
+                            <thead>
+                                <tr>
+                                    <th>Attack Type</th>
+                                    <th>Count</th>
+                                </tr>
+                            </thead>
+                            <tbody id="attackList">
+                                <!-- Attack types will be listed here -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
     
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/js/bootstrap.bundle.min.js"></script>
     <script>
         // Initialize charts
         const trafficCtx = document.getElementById('trafficChart').getContext('2d');
@@ -364,163 +713,3 @@ def run_dashboard():
                         title: {
                             display: true,
                             text: 'Time (seconds ago)'
-                        }
-                    }
-                },
-                plugins: {
-                    legend: {
-                        position: 'top',
-                    }
-                },
-                animation: {
-                    duration: 0
-                }
-            }
-        });
-        
-        // Format time duration
-        function formatDuration(seconds) {
-            const hrs = Math.floor(seconds / 3600);
-            const mins = Math.floor((seconds % 3600) / 60);
-            const secs = Math.floor(seconds % 60);
-            
-            let result = '';
-            if (hrs > 0) result += `${hrs}h `;
-            if (mins > 0) result += `${mins}m `;
-            result += `${secs}s`;
-            
-            return result;
-        }
-        
-        // Update dashboard with latest data
-        function updateDashboard() {
-            // Update statistics
-            fetch('/api/stats')
-                .then(response => response.json())
-                .then(data => {
-                    document.getElementById('totalPackets').textContent = data.total_packets.toLocaleString();
-                    document.getElementById('blockedIPs').textContent = data.blocked_ips;
-                    document.getElementById('malwareDetected').textContent = data.nimda_detections;
-                    document.getElementById('uptime').textContent = formatDuration(data.uptime);
-                });
-            
-            // Update events
-            fetch('/api/events')
-                .then(response => response.json())
-                .then(events => {
-                    const eventList = document.getElementById('eventList');
-                    eventList.innerHTML = '';
-                    
-                    // Display most recent events first
-                    events.reverse().forEach(event => {
-                        const eventDiv = document.createElement('div');
-                        eventDiv.className = `event-item ${event.type}`;
-                        eventDiv.innerHTML = `
-                            <strong>${event.timestamp}</strong>: ${event.message}
-                        `;
-                        eventList.appendChild(eventDiv);
-                    });
-                });
-            
-            // Update blocked IPs
-            fetch('/api/blocks')
-                .then(response => response.json())
-                .then(blocks => {
-                    const blockedList = document.getElementById('blockedList');
-                    blockedList.innerHTML = '';
-                    
-                    blocks.reverse().forEach(block => {
-                        const row = document.createElement('tr');
-                        row.innerHTML = `
-                            <td>${block.ip}</td>
-                            <td>${block.reason}</td>
-                            <td>${block.timestamp}</td>
-                        `;
-                        blockedList.appendChild(row);
-                    });
-                });
-            
-            // Update traffic chart
-            fetch('/api/traffic')
-                .then(response => response.json())
-                .then(trafficData => {
-                    // Clear previous datasets
-                    trafficChart.data.datasets = [];
-                    
-                    // Add new datasets (limit to top 5 IPs by traffic)
-                    const topIPs = Object.keys(trafficData)
-                        .map(ip => ({
-                            ip,
-                            total: trafficData[ip].reduce((sum, count) => sum + count, 0)
-                        }))
-                        .sort((a, b) => b.total - a.total)
-                        .slice(0, 5)
-                        .map(item => item.ip);
-                    
-                    // Generate random colors for IPs
-                    const getColor = (index) => {
-                        const colors = [
-                            'rgba(255, 99, 132, 0.7)',
-                            'rgba(54, 162, 235, 0.7)',
-                            'rgba(255, 206, 86, 0.7)',
-                            'rgba(75, 192, 192, 0.7)',
-                            'rgba(153, 102, 255, 0.7)'
-                        ];
-                        return colors[index % colors.length];
-                    };
-                    
-                    topIPs.forEach((ip, index) => {
-                        trafficChart.data.datasets.push({
-                            label: ip,
-                            data: trafficData[ip],
-                            backgroundColor: getColor(index),
-                            borderColor: getColor(index),
-                            borderWidth: 2,
-                            tension: 0.4
-                        });
-                    });
-                    
-                    trafficChart.update();
-                });
-        }
-        
-        // Update dashboard every 2 seconds
-        setInterval(updateDashboard, 2000);
-        updateDashboard();
-    </script>
-</body>
-</html>""")
-    
-    # Start Flask app
-    app.run(host=DASHBOARD_HOST, port=DASHBOARD_PORT, debug=False)
-
-if __name__ == "__main__":
-    # Check for root privileges
-    if os.geteuid() != 0:
-        print("This script requires root privileges.")
-        sys.exit(1)
-    
-    # Import whitelist and blacklist IPs
-    whitelist_ips = read_ip_file("whitelist.txt")
-    blacklist_ips = read_ip_file("blacklist.txt")
-    
-    # Initialize variables
-    packet_count = defaultdict(int)
-    last_check = [int(time.time())]
-    
-    # Start dashboard in a separate thread
-    print(f"Starting dashboard on http://{DASHBOARD_HOST}:{DASHBOARD_PORT}")
-    dashboard_thread = threading.Thread(target=run_dashboard)
-    dashboard_thread.daemon = True
-    dashboard_thread.start()
-    
-    # Start packet sniffing
-    log_event("Firewall started. Monitoring network traffic...")
-    print(f"THRESHOLD: {THRESHOLD} packets/second")
-    
-    try:
-        # Start packet sniffing
-        sniff(filter="ip", prn=packet_callback, store=0)
-    except KeyboardInterrupt:
-        log_event("Firewall stopped by user.", "info")
-        print("\nFirewall stopped. Goodbye!")
